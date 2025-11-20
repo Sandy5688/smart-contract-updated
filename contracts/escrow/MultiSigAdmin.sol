@@ -27,6 +27,7 @@ contract MultiSigAdmin {
     event Executed(uint256 txId);
     event SignerReplaced(address indexed oldSigner, address indexed newSigner);
     event SignerReplaceProposed(uint256 txId, address indexed oldSigner, address indexed newSigner);
+    event Received(address indexed from, uint256 amount);
 
     modifier onlySigner() {
         require(isSigner(msg.sender), "Not authorized");
@@ -45,10 +46,7 @@ contract MultiSigAdmin {
     }
 
     function isSigner(address addr) public view returns (bool) {
-        for (uint256 i = 0; i < 3; i++) {
-            if (signers[i] == addr) return true;
-        }
-        return false;
+        return addr == signers[0] || addr == signers[1] || addr == signers[2];
     }
 
     function submitTx(address to, uint256 value, bytes calldata data) external onlySigner returns (uint256) {
@@ -103,6 +101,14 @@ contract MultiSigAdmin {
         emit Executed(txId);
     }
 
+    /// @notice Manual trigger for executing a confirmed transaction (if auto-exec was skipped)
+    function executeTx(uint256 txId) external onlySigner {
+        Transaction storage txn = transactions[txId];
+        require(!txn.executed, "Already executed");
+        require(txn.confirmations >= THRESHOLD, "Not enough confirmations");
+        _executeTx(txId);
+    }
+
     /**
      * @dev Signer replacement MUST go through the same multisig flow.
      * Create a tx with `to = address(this)` and `data = abi.encodeWithSignature("replaceSignerViaTx(address,address)", oldSigner, newSigner)`
@@ -131,5 +137,28 @@ contract MultiSigAdmin {
         emit SignerReplaceProposed(txId, oldSigner, newSigner);
     }
 
-    receive() external payable {}
+    function getSigners() external view returns (address[3] memory) {
+        return signers;
+    }
+
+    function getTransaction(uint256 txId) external view returns (address to, uint256 value, bytes memory data, uint256 confirmations, bool executed) {
+        Transaction storage t = transactions[txId];
+        return (t.to, t.value, t.data, t.confirmations, t.executed);
+    }
+
+    function getConfirmations(uint256 txId) external view returns (uint256) {
+        return transactions[txId].confirmations;
+    }
+
+    function isConfirmed(uint256 txId, address signer) external view returns (bool) {
+        return hasConfirmed[txId][signer];
+    }
+
+    receive() external payable {
+        emit Received(msg.sender, msg.value);
+    }
+
+    fallback() external payable {
+        emit Received(msg.sender, msg.value);
+    }
 }

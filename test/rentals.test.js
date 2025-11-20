@@ -24,6 +24,7 @@ describe("NFT Rental System", function () {
     await mfh.connect(lessor).approve(nft.target, ethers.parseEther("100"));
 
     // Mint NFT to lessor
+    await nft.approveMetadata("ipfs://test-uri");
     await nft.connect(lessor).mintNFT("ipfs://test-uri");
 
     RentalEngine = await ethers.getContractFactory("RentalEngine");
@@ -35,6 +36,7 @@ describe("NFT Rental System", function () {
     await leaseAgreement.waitForDeployment();
 
     await rentalEngine.setTreasury(treasury.address);
+    await rentalEngine.setLeaseAgreement(leaseAgreement.target);
   });
 
   describe("RentalEngine", function () {

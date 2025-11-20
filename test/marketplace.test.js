@@ -27,6 +27,9 @@ describe(" Marketplace Module", function () {
     await nft.waitForDeployment();
     console.log("NFTMinting deployed at:", nft.target);
 
+    // Approve metadata used in tests
+    await nft.approveMetadata("ipfs://test-metadata");
+
     // Deploy RoyaltyManager
     const RoyaltyManager = await ethers.getContractFactory("RoyaltyManager");
     royaltyManager = await RoyaltyManager.deploy(token.target, treasury.target);
@@ -35,7 +38,7 @@ describe(" Marketplace Module", function () {
 
     // Deploy EscrowManager
     const EscrowManager = await ethers.getContractFactory("EscrowManager");
-    escrow = await EscrowManager.deploy(nft.target);
+    escrow = await EscrowManager.deploy(nft.target, multisig.address);
     await escrow.waitForDeployment();
     console.log("EscrowManager deployed at:", escrow.target);
 
@@ -112,9 +115,10 @@ describe(" Marketplace Module", function () {
   });
 
   describe(" BuyNowPayLater.sol", function () {
-    it("should allow owner to set installment count", async () => {
-      await bnpl.setInstallments(4);
-      expect(await bnpl.defaultInstallments()).to.equal(4);
+    it("should allow owner to set default plan duration", async () => {
+      const fortyFiveDays = 45 * 24 * 60 * 60;
+      await bnpl.setDefaultDuration(fortyFiveDays);
+      expect(await bnpl.defaultDuration()).to.equal(fortyFiveDays);
     });
   });
 
@@ -177,13 +181,13 @@ describe(" Marketplace Module", function () {
   describe(" BiddingSystem.sol", function () {
     it("should reject invalid bid cancellation", async () => {
       await expect(bidding.connect(user2).cancelBid(1))
-        .to.be.revertedWith("No bid found");
+        .to.be.revertedWith("No bid");
     });
 
     it("should reject accept bid by non-owner", async () => {
       await token.connect(user2).approve(bidding.target, ethers.parseEther("50"));
       await bidding.connect(user2).placeBid(1, ethers.parseEther("50"));
-      await expect(bidding.connect(user2).acceptBid(1, 0))
+      await expect(bidding.connect(user2).acceptBid(1, user2.address))
         .to.be.revertedWith("Not owner");
     });
   });

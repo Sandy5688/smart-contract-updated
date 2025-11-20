@@ -1,0 +1,688 @@
+
+##### 1. `MFHToken.sol`
+❗ Issue #A — Already mint the full supply in the constructor, but mint() is still enabled
+Task sheet says: No further mint after full supply
+❗ Issue #B — Burn function allows owner to burn ANY user’s tokens
+Task sheet only says: “burn(address, amount)” and industry standard is users burn their own tokens.
+Your implementation wrong so the right is " Owner should NOT be able to burn user tokens but user can burn their own tokens".
+❗ Issue #C — totalMinted is inconsistent
+Mint full MAX_SUPPLY in constructor: But you ALSO increment totalMinted inside mint().
+❗ Issue #D — Pausable does not pause mint/burn
+Currently:
+Transfer is paused
+Mint is NOT paused
+Burn is NOT paused
+If we want pausing to freeze all token operations
+
+##### 2.`TreasuryVault.sol` (polish)
+A. Add nonReentrant Protection
+B.Add Optional Native ETH Support
+C. setMultisig Should Emit an Event. Transparency for audits, logs, and UI.
+D.Add a Frontend Helper: balanceOf(token)
+E.Validate Multisig in Constructor
+F. Missing safeguard: token address should not be zero
+
+##### 3. Staking.sol
+A. Fix the Broken Reward Accounting System
+Replace the incorrect logic (rewardDebt = timestamp) with the industry-standard model:
+* Add accRewardPerToken (scaled by 1e12 or 1e18)
+* Add lastUpdateTime
+* Update pool on every action: stake, unstake, claim
+* For each user:
+  * Calculate pending rewards = (amount * accRewardPerToken / ACC_PRECISION) - rewardDebt
+  * Update rewardDebt
+B. Add Reward Token Funding Mechanism + Balance Check
+Contract must never run out of reward tokens (otherwise users’ unstake/claim will revert).
+Add:
+* function fundRewards(uint256 amount)
+* Before sending rewards, check:
+```solidity
+require(rewardToken.balanceOf(address(this)) >= rewardAmount, "Insufficient reward tokens");
+C. Standardize Reward Rate Units
+Clarify what rewardRate represents and implement consistently:
+* rewardRate = tokens per second (recommended)
+* Update pool before rate changes
+Add comments/documentation to prevent owner misconfiguration.
+D. Make Early Withdrawal Penalty Truly Optional
+Current logic makes penalty always active unless manually set to 0.
+Add:
+* bool penaltyEnabled = false; (default false)
+* Owner function setPenalty(bool enabled)
+E. Fix Penalty Bypass via Frequent Claiming
+Users can avoid penalty by simply claiming often.
+Solutions (choose one):
+* Apply penalty to claimReward()\
+  OR
+* Enforce minimum staking time before ANY rewards become claimable\
+  OR
+* Lock rewards during penalty window
+F. Add amount parameter to unstake()
+Only if admin wants partial unstaking:
+```solidity
+function unstake(uint256 amount)
+(Task sheet says full unstake is acceptable, so this is optional.)
+G. Optimize Transfers
+Combine two transfers in unstake() into one:
+```solidity
+stakingToken.transfer(user, principal + reward);
+H. Add Reentrancy Protection
+Add:
+```solidity
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+Apply nonReentrant to:
+* stake()
+* unstake()
+* claimReward()
+I. Validate Token Address
+Before staking:
+```solidity
+require(address(stakingToken) != address(0), "Invalid staking token");
+require(address(rewardToken) != address(0), "Invalid reward token");
+J. Emit Events
+Add events for:
+* Staked(address user, uint256 amount)
+* Unstaked(address user, uint256 amount)
+* RewardClaimed(address user, uint256 amount)
+* PenaltyApplied(address user, uint256 amount) (if applicable)
+K. Add View Function for Pending Rewards
+```solidity
+function pendingRewards(address user) external view returns (uint256)
+L. Add Emergency Withdraw (No Rewards)
+For safety if reward logic breaks:
+```solidity
+function emergencyWithdraw() external nonReentrant
+M. Safe Reward Rate Update Function
+Before owner changes reward rate:
+```solidity
+_updatePool();
+rewardRate = newRate;
+
+##### 4. NFTMinting.sol
+A. Integrate RoyaltyManager (Missing)
+   • Add IRoyaltyManager public royaltyManager;
+   • Add setRoyaltyManager(address) onlyOwner
+   • After _safeMint(), call:
+     royaltyManager.setTokenRoyalty(tokenId, recipient, basisPoints);  // or whatever the exact function is
+   • If interface unknown yet → at minimum add the variable + setter + comment "// TODO: call royaltyManager on mint"
+
+B. Integrate BoostEngine (Missing)
+   • Add IBoostEngine public boostEngine;
+   • Add setBoostEngine(address) onlyOwner
+   • After successful mint, call:
+     boostEngine.onMint(msg.sender, newId);  // or the exact function name your BoostEngine uses
+
+C. Reject Unverified Metadata (task explicitly says “reject unverified metadata”)
+   • Add mapping(string => bool) public approvedMetadata;
+   • In mintNFT():
+     require(approvedMetadata[metadataURI], "Metadata URI not approved");
+   • Add onlyOwner functions:
+     function approveMetadata(string calldata uri) external onlyOwner { approvedMetadata[uri] = true; }
+     function revokeMetadata(string calldata uri) external onlyOwner { approvedMetadata[uri] = false; }
+
+D. Use SafeERC20 for all IERC20 calls (Polish)
+   import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+   using SafeERC20 for IERC20;
+   → Replace all transfer/transferFrom with .safeTransfer/.safeTransferFrom
+
+E. Add missing events (Polish)
+   event MintPriceUpdated(uint256 newPrice);
+   event MaxPerWalletUpdated(uint256 newMax);
+   event FeesWithdrawn(address indexed to, uint256 amount);
+   event MetadataApproved(string uri);
+   event MetadataRevoked(string uri);
+   Emit them in the respective setter/withdraw/approve functions.
+
+F. Safety validation (Polish)
+   - In constructor: require(_paymentToken != address(0));
+   - In withdrawFees(): require(to != address(0));
+   - Keep the existing transferFrom check that returns bool (or switch to SafeERC20)
+
+G. View functions (Polish)
+   function totalSupply() external view returns (uint256) { return _tokenIds.current(); }
+   function mintedBy(address user) external view returns (uint256) { return mintedBy[user]; }
+
+
+##### 5. RoyaltyManager.sol
+   !00 % passed and even much better then the given task sheet, thanks
+
+##### 6. BoostEngine.sol 
+    Wow again a perfect job, thanks 
+
+##### 7. MarketplaceCore.sol
+Only potential gap: on-chain platform fee split (3% ops, 1% burn, 1% rewards) is not implemented; fee goes to a single treasury. If treasury handles the split internally, then the task sheet is fully satisfied.
+
+##### 8. BuyNowPayLater.sol
+A. **Seller Never Gets Paid → Economically Broken**
+   * Current: All installment payments go to the contract (`address(this)`) and stay there forever.
+   * **Fix:**
+     * Add `address seller` to the BNPL struct.
+     * On full repayment → transfer `plan.totalPrice` to seller.
+     * On default → either transfer already-paid amount to seller or retain as penalty (decide business rule).
+
+B. **Wrong Initiator Role (Buyer ≠ Seller)**
+   * Current: Only current NFT owner can call `initiateBNPL` → backwards.
+   * Real BNPL flow: Buyer sees a listed NFT and starts BNPL to buy it from seller.
+   * **Fix:**
+     * Rename `initiateBNPL` → `startBNPL` for clarity.
+     * Function signature: `startBNPL(uint256 tokenId, uint256 totalPrice, uint256 downPayment)`
+     * Caller = buyer
+     * NFT must be listed in Marketplace (or via a separate listing step)
+     * Record original owner as `seller` in struct
+     * Transfer NFT immediately to escrow
+
+C. **Money Flow on Completion & Default**
+   * Current: NFT released but payments remain in contract → money stuck.
+   * **Fix:** Choose **one** clean model and implement consistently:
+     **Model A – Recommended (Simple & Common)**
+     * All payments (down + installments) go to contract
+     * When `paid == totalPrice` → send 100% of funds to seller, release NFT to buyer
+     * On default → send already-paid amount to seller (or handle penalty), return NFT to seller or admin
+
+     **Model B – Alternative (Instant Down Payment to Seller)**
+     * Down payment → sent immediately to seller
+     * Remaining installments → held in contract
+     * On full repayment → send remaining installments to seller
+     * On default → retain remaining installments as penalty or refund
+   ⚠️ **Important:** Only **one model** should be implemented to avoid conflicting logic.
+
+D. **Add Missing Events with Amounts and Participants**
+   * Add and emit these events at appropriate steps:
+     ```solidity
+     event BNPLStarted(uint256 indexed tokenId, address buyer, address seller, uint256 totalPrice, uint256 downPayment);
+     event InstallmentPaid(uint256 indexed tokenId, uint256 amount, uint256 totalPaid);
+     event BNPLCompleted(uint256 indexed tokenId, address buyer, uint256 totalPaid);
+     event BNPLDefaulted(uint256 indexed tokenId, uint256 paidSoFar, bool fundsSentToSeller);
+
+E. **Add ReentrancyGuard**
+   * Import OpenZeppelin `ReentrancyGuard`
+   * Apply `nonReentrant` modifier to:
+     * `startBNPL()`
+     * `payInstallment()`
+     * `defaulted()`
+
+F. **Use SafeERC20 Everywhere**
+
+   * Import `SafeERC20` from OpenZeppelin
+   * Replace all `transfer` / `transferFrom` calls with `.safeTransfer` / `.safeTransferFrom`
+
+G. **Configurable Plan Duration**
+   * Instead of hard-coded 30 days:
+     ```solidity
+     uint256 public defaultDuration = 30 days;
+     function setDefaultDuration(uint256 duration) external onlyOwner
+
+H. **Frontend View Functions**
+   * Provide helpers to read plan data:
+     ```solidity
+     function getPlan(uint256 tokenId) external view returns (BNPL memory)
+     function isDefaulted(uint256 tokenId) external view returns (bool)
+
+I. **Per-Installment Deadlines**
+   * Track due dates for each installment if business rules require partial defaults.
+   * Otherwise, overall plan deadline is sufficient.
+
+J. **Protocol Fee**
+* Add small configurable 2-5% fee on BNPL transactions for platform sustainability.
+
+
+##### 9. AuctionModule.sol
+Everything else is perfect except:
+A. Platform fee = 0% (missing)
+Job scope explicitly says “platform takes fee” → missing
+Fix: Deduct configurable platform fee from winning bid and send to treasury.
+
+B. No admin cancel function
+Job scope: “admin can cancel auction” → missing
+Fix: Add cancelAuction(uint256 tokenId) callable only by owner/admin.
+
+C. Use SafeERC20 everywhere (Polish)
+Current transfer / transferFrom can fail with fee-on-transfer or rebasing tokens
+Fix: Import OpenZeppelin SafeERC20 and replace all token transfers.
+
+D. Add ReentrancyGuard (Polish)
+Add nonReentrant to placeBid() and finalizeAuction() to prevent reentrancy attacks.
+
+E. Add Treasury Address (Polish)
+Add address public treasury and setTreasury(address) function for platform fee collection.
+
+F. Add AuctionCancelled Event (Polish)
+Example: event AuctionCancelled(uint256 tokenId, address seller);
+Emit when admin cancels an auction.
+
+ 
+##### 12. BiddingSystem.sol
+A. Replace array with mapping (one bid per bidder)
+   → Change `mapping(uint256 => Bid[]) public bids`  
+   → To `mapping(uint256 => mapping(address => uint256)) public bids`  
+   → New bid overwrites old one + auto-refund old amount
+B. Change acceptBid signature
+   → From `acceptBid(tokenId, index)`  
+   → To `acceptBid(uint256 tokenId, address bidder)`
+C. Add full payment flow on acceptBid
+   → Add variables:
+     ```solidity
+     address public treasury;
+     IRoyaltyManager public royaltyManager;
+     uint256 public platformFeeBps = 250; // 2.5   ```
+   → Add onlyOwner setters for all three
+   → In acceptBid():
+     - Call `royaltyManager.distributeRoyalty(tokenId, amount, bidder)`
+     - Calculate & send platform fee to treasury
+     - Send remainder to seller
+     - Transfer NFT to bidder
+D. Security upgrades
+   → Import and use `SafeERC20` for all token transfers
+   → Inherit `ReentrancyGuard`
+   → Add `nonReentrant` to: placeBid, cancelBid, acceptBid
+E. Clear all bids after acceptance
+   → `delete bids[tokenId];` after successful accept
+F. Refund old bid automatically in placeBid()
+   → If user already has a bid → refund it before storing new one
+G. Upgrade events (add indexed)
+   ```solidity
+   event BidPlaced(uint256 indexed tokenId, address indexed bidder, uint256 amount);
+   event BidCancelled(uint256 indexed tokenId, address indexed bidder, uint256 amount);
+   event BidAccepted(uint256 indexed tokenId, address indexed seller, address indexed bidder, uint256 amount)
+H. Add view helper
+   ```solidity
+   function getBid(uint256 tokenId, address bidder) external view returns (uint256)
+
+##### 11. LeaseAgreement.sol 
+U missed some of it from previou job scope its missing and polished job scope
+| **Purpose**     | Handles rental/lease contracts for NFTs with automatic or forced return                           |
+| **Access**      | • Public: anyone (lessor) can start a lease<br>• Only contract owner/admin can force-end a lease prematurely |
+| **Functions**   | • `startLease(uint256 tokenId, address lessee, uint256 duration)`<br>• `endLease(uint256 tokenId)` (onlyOwner)<br>• `setLeaseFeePerDay(uint256 newFee)` (onlyOwner)<br>• `setPaymentToken(address token)` (onlyOwner)<br>• `updateRentalEngine(address newEngine)` (onlyOwner) |
+| **Events**     | • `LeaseStarted(address indexed lessor, address indexed lessee, uint256 indexed tokenId, uint256 duration, uint256 totalFee)`<br>• `LeaseEnded(uint256 indexed tokenId, address indexed endedBy)`<br>• `LeaseFeeUpdated(uint256 newFeePerDay)` (optional but recommended) |
+| **Logic Rules** | • Rental fee is calculated as `duration × feePerDay`<br>• Fee is paid **upfront** by the lessee in ERC20 (MFH or configurable token)<br>• Fee is transferred **directly to the NFT owner (lessor)**<br>• NFT is transferred to the RentalEngine escrow during the lease<br>• NFT is automatically or manually returned after duration expires<br>• Admin can force-end any active lease at any time (premature reclaim)<br>• No one except admin can call `endLease()` |
+| **Integration** | • Must interact with external `IRentalEngine` for NFT custody and timer logic<br>• Uses configurable ERC20 as payment token<br>• Supports upgrading/changing the RentalEngine address |
+| **Security**    | • Use OpenZeppelin `SafeERC20` for all token transfers<br>• Inherit `ReentrancyGuard` and apply `nonReentrant` to `startLease` and `endLease`<br>• All external calls protected against reentrancy |
+| **Testing**     | • Start lease → correct fee charged and sent to lessor<br>• Normal lease expiry → NFT returned<br>• Admin force-ends lease → NFT returned immediately<br>• Non-admin tries to end lease → reverts<br>• Invalid duration / zero addresses → reverts<br>• Reentrancy attempts → blocked |
+
+
+
+#####12. RentalEngine.sol
+| **Purpose**      | Core escrow + timer engine for NFT rentals. Holds NFTs during lease, enforces expiry, handles returns & defaults |
+| **Access**       | • Public: only `returnNFT()` can be called by lessee<br>• Admin-only: `markDefaulted()`, `forceEndLease()`<br>• Only trusted LeaseAgreement can start a lease |
+| **Functions**    | • `registerLease(address lessor, address lessee, uint256 tokenId, uint256 duration)` → onlyLeaseAgreement<br>• `returnNFT(uint256 tokenId)` → called by lessee<br>• `markDefaulted(uint256 tokenId)` → onlyOwner<br>• `forceEndLease(uint256 tokenId)` → onlyOwner<br>• Admin setters: `setLeaseAgreement()`, `setRewardToken()`, `setDefaultReward()`, `setTreasury()` |
+| **Events**       | • `Rented(uint256 indexed tokenId, address indexed lessor, address indexed lessee, uint256 expiresAt, uint256 reward)`<br>• `Returned(uint256 indexed tokenId, address indexed lessee, bool onTime)`<br>• `Defaulted(uint256 indexed tokenId)`<br>• `LeaseForceEnded(uint256 indexed tokenId, address indexed by)` |
+| **Logic Rules**  | • NFT **must stay in RentalEngine** during entire lease (true escrow)<br>• No direct transfer to lessee<br>• Usage rights granted off-chain or via wrapper<br>• Reward (ERC20 from treasury) paid **only** if lessee calls `returnNFT()` before expiry<br>• On expiry + no return → admin can call `markDefaulted()` → NFT returned to lessor, no reward<br>• Admin can force-end anytime → NFT returned to lessor, reward forfeited |
+| **Integration**  | • Works exclusively with LeaseAgreement<br>• LeaseAgreement must `safeTransferFrom` NFT into RentalEngine **before** calling `registerLease()`<br>• `rent()` public function must be **removed or restricted** to onlyLeaseAgreement |
+| **Security**     | • Inherit `ReentrancyGuard` + `nonReentrant` on all state-changing functions<br>• All ERC721 transfers use `safeTransferFrom`<br>• Implement `IERC721Receiver.onERC721Received`<br>• All ERC20 transfers use `SafeERC20`<br>• Add `onlyLeaseAgreement` modifier + setter<br>• Require `nft.ownerOf(tokenId) == address(this)` before any lease action |
+| **Rewards**      | • Configurable `rewardToken` (ERC20) and default reward amount<br>• Reward paid from treasury **only** on timely return<br>• Reward = 0 on default or force-end |
+| **Admin Tools**  | • `rescueERC721(address token, uint256 tokenId, address to)` → onlyOwner<br>• `rescueERC20(address token, uint256 amount, address to)` → onlyOwner |
+| **View Helpers** | • `getLease(uint256 tokenId) → (lessor, lessee, expiresAt, active)`<br>• `isActive(uint256 tokenId)`<br>• `timeLeft(uint256 tokenId)` |
+| **Testing**      | Must include:<br>• LeaseAgreement deposits NFT → registerLease → lease active<br>• Lessee returns on time → reward paid<br>• Lessee returns late → no reward<br>• Admin force-end → NFT back, no reward<br>• Default flow after expiry<br>• Reentrancy attempts → revert<br>• Wrong caller / missing escrow → revert |
+
+IMPLEMENTATION NOTES (MUST FOLLOW)
+- LeaseAgreement deposits NFT into RentalEngine first → then calls registerLease()
+- rent() public function shall be removed or restricted via onlyLeaseAgreement
+- NFT never leaves RentalEngine during lease (true escrow)
+- Reward paid only on timely returnNFT() from treasury
+- All transfers use safe* versions
+- All state changes protected by nonReentrant
+- Include emergency rescue functions
+
+
+#####13. LoanModule.sol
+| Field            | Details                                                                                                         |
+|------------------|-----------------------------------------------------------------------------------------------------------------|
+| **Purpose**      | P2P or pool-based lending of MFH using NFTs as collateral. Borrowers lock NFT → receive loan → repay + interest |
+| **Access**       | • Public: `requestLoan`, `repayLoan`<br>• Anyone can liquidate expired loans<br>• Admin configures parameters |
+| **Functions**    | • `requestLoan(uint256 tokenId, uint256 amount)` → borrower<br>• `repayLoan(uint256 tokenId, uint256 amount)` → borrower<br>• `liquidateLoan(uint256 tokenId)` → **public** (not onlyOwner)<br>• Admin setters: `setTreasury()`, `setInterestRate()`, `setLTV()`, `setLoanDuration()` |
+| **Events**       | • `LoanRequested(uint256 indexed tokenId, address indexed borrower, uint256 amount, uint256 interest)`<br>• `Repaid(uint256 indexed tokenId, uint256 amountPaid, uint256 remaining)`<br>• `LoanClosed(uint256 indexed tokenId)`<br>• `Liquidated(uint256 indexed tokenId, address indexed liquidator)` |
+| **Logic Rules**  | • Loan funds come from **treasury/pool** (pre-approved)<br>• Repayments + interest go to **treasury**<br>• On full repayment → NFT released to borrower<br>• On expiry → anyone can liquidate → NFT goes to **lender/treasury** (configurable)<br>• Interest charged (configurable rate)<br>• One loan per NFT only |
+| **Integration**  | • Uses external `EscrowManager` for NFT custody<br>• All ERC20 transfers via `SafeERC20`<br>• All ERC721 transfers via `safeTransferFrom` |
+| **Security**     | • Inherit `ReentrancyGuard` + `nonReentrant` on all state-changing functions<br>• Pull tokens **before** updating state<br>• Require `token.balanceOf(treasury) >= amount` before lending<br>• Overpayment protection: refund excess<br>• Emergency rescue functions (ERC20 + ERC721) |
+| **Funding**      | • Treasury (or future lending pool) must hold MFH and pre-approve LoanModule<br>• Repayments flow back to treasury |
+| **Interest**     | • Configurable `interestRateBps` (e.g. 500 = 5%)<br>• Total repayable = principal + interest |
+| **Liquidation**  | • Public function (anyone can trigger)<br>• NFT forfeited to treasury or designated liquidator address |
+
+
+
+#####14. InstallmentLogic.sol 
+| **Purpose**      | Pure logic library for BNPL and loan installment plans (used by LoanModule / BNPL)                             |
+| **Access**       | Internal only — no public functions                                                                             |
+| **Functions**    | • `createPlan(totalAmount, installments, startTime, interval)` → returns plan<br>• `payInstallment(plan, amount, currentTime)` → returns (remaining, isLateThisPayment)<br>• `getRemaining(plan)` → view<br>• `isDefaulted(plan, currentTime)` → view |
+| **Events**       | NONE — library cannot emit events → caller (LoanModule/BNPL) must emit InstallmentPaid and others              |
+| **Logic Rules**  | • One installment = exactly `totalAmount / installmentCount`<br>• Partial payments NOT allowed (caller must refund excess)<br>• Each installment has its own due date: `startTime + n × interval`<br>• Default = missed any single installment (even if others paid)<br>• On full repayment → plan.active = false |
+| **Struct**       | ```solidity
+struct InstallmentPlan {
+    uint256 totalAmount;
+    uint256 paidAmount;
+    uint8 installmentCount;
+    uint8 installmentsPaid;
+    uint256 startTime;     // timestamp when first installment is due
+    uint256 interval;      // seconds between installments (e.g. 30 days)
+    bool active;
+}
+``` |
+| **Security**     | • No events in library<br>• No storage side effects<br>• No external calls<br>• Pure logic only                 |
+| **Integration**  | • Used by LoanModule and BNPL contracts<br>• Caller must:<br>   → Pull ERC20 payment first<br>   → Call payInstallment()<br>   → Refund excess if any<br>   → Emit events<br>   → Handle NFT release/liquidation |
+| **Testing**      | Must cover:<br>• Full installment payments only<br>• Overpayment → excess refunded by caller<br>• Per-installment deadlines<br>• isDefaulted() triggers after any missed installment<br>• Full repayment → plan.active = false<br>• Caller emits events correctly |
+
+URGENT PATCHES 
+1. Remove InstallmentPaid event (impossible in library)  
+2. Enforce full installments only — reject partial payments  
+3. Add startTime + interval to struct  
+4. Update createPlan() to accept startTime + interval  
+5. Fix payInstallment(): count only full installments + return isLate  
+6. Fix isDefaulted(): checks current installment deadline  
+7. Document: caller handles ERC20 pull, excess refund, events, NFT logic
+
+
+#####15. RewardDistributor.sol
+Distribute  token rewards (referrals, engagement, leaderboard bonuses, airdrops, etc.)
+**Access**
+* onlyOwner: `distribute()`, `withdrawLeftover()`, `setToken()`
+
+**Functions**
+* `distribute(address[] users, uint256[] amounts)`
+* `withdrawLeftover(address to, uint256 amount)`
+* `setToken(address _token)`
+
+**Events**
+* `RewardSent(address indexed user, uint256 amount)` (existing)
+* `Withdrawn(address indexed to, uint256 amount)` (add for transparency)
+
+**Security Requirements**
+* SafeERC20 for all token transfers
+* ReentrancyGuard + `nonReentrant` on `distribute()` & `withdrawLeftover()`
+* Zero-address protection for recipients
+* Balance check before any withdrawal
+* Revert on mismatched arrays or insufficient balance
+* Comment/guidance for batch gas limits
+
+A. **Use SafeERC20**
+```solidity
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+using SafeERC20 for IERC20;
+// Replace every:
+mfh.transfer(...)      → mfh.safeTransfer(...)
+mfh.transferFrom(...) → mfh.safeTransferFrom(...)
+```
+B. **Add ReentrancyGuard**
+```solidity
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract RewardDistributor is Ownable, ReentrancyGuard {
+    function distribute(address[] calldata users, uint256[] calldata amounts)
+        external onlyOwner nonReentrant { ... }
+
+    function withdrawLeftover(address to, uint256 amount)
+        external onlyOwner nonReentrant { ... }
+}
+
+C. **Block zero-address recipients**
+```solidity
+require(users[i] != address(0), "Zero address recipient");
+
+D. **Add balance check in `withdrawLeftover`**
+```solidity
+require(amount <= mfh.balanceOf(address(this)), "Insufficient balance");
+
+E. **Add `Withdrawn` event**
+```solidity
+event Withdrawn(address indexed to, uint256 amount);
+// inside withdrawLeftover:
+emit Withdrawn(to, amount);
+
+F. **Add gas limit warning comment**
+```solidity
+// WARNING: Batches >200–300 recipients may hit block gas limit.
+// Recommend splitting large distributions into chunks.
+
+
+##### 16. SecretJackpot.sol
+
+**Purpose**
+Random jackpot distribution for users based on staked/active status.
+
+**Access**
+* Public: `triggerJackpot()` (subject to cooldown)
+* Admin: `setEligibilityRules()`, `setStakingContract()`, `setToken()`, `withdrawLINK()`
+
+**Functions**
+* `triggerJackpot()` → requests randomness
+* `fulfillRandomness()` → selects winner and pays jackpot
+* `setEligibilityRules(cooldown, amount)` → update rules
+* `setStakingContract(address)` → set staking contract
+* `setToken(address)` → set jackpot token
+* `withdrawLINK()` → withdraw LINK tokens
+* **NEW:** `depositJackpotFunds()` → fund jackpot pool
+
+**Events**
+* `JackpotRequested(bytes32 requestId)`
+* `JackpotWon(address winner, uint256 amount)`
+* `EligibilityRulesUpdated(uint256 cooldown, uint256 jackpotAmount)`
+* **NEW:** `StakingContractUpdated(address newContract)`
+* **NEW:** `PaymentTokenUpdated(address newToken)`
+* **NEW:** `JackpotFundDeposited(address from, uint256 amount)`
+
+
+## **Please Fixe below issues **
+A. **Use SafeERC20 for all token transfers**
+```solidity
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+using SafeERC20 for IERC20;
+IERC20(paymentToken).safeTransfer(winner, jackpotAmount);
+
+B. **Remove `lastEligibleList`**
+* Do **not store eligible addresses** at trigger time. Fetch fresh in `fulfillRandomness()`.
+
+C. **Fix fulfillRandomness()**
+```solidity
+function fulfillRandomness(bytes32, uint256 randomness) internal override {
+    address[] memory eligible = stakingContract.getEligibleAddresses();
+    require(eligible.length > 0, "No eligible users");
+
+    uint256 winnerIndex = randomness % eligible.length;
+    address winner = eligible[winnerIndex];
+
+    require(IERC20(paymentToken).balanceOf(address(this)) >= jackpotAmount, "Insufficient funds");
+    IERC20(paymentToken).safeTransfer(winner, jackpotAmount);
+
+    emit JackpotWon(winner, jackpotAmount);
+}
+```
+
+D. **ReentrancyGuard**
+* Add OpenZeppelin `ReentrancyGuard`
+* Apply `nonReentrant` to `triggerJackpot()` and `withdrawLINK()`
+
+E. **Fund check before triggering**
+```solidity
+require(IERC20(paymentToken).balanceOf(address(this)) >= jackpotAmount, "Insufficient jackpot funds");
+
+F. **Admin setter validations & events**
+```solidity
+require(_cooldown > 0, "Cooldown must be > 0");
+require(_amount > 0, "Jackpot amount must be > 0");
+emit StakingContractUpdated(_staking);
+emit PaymentTokenUpdated(_token);
+
+G. **Deposit function for jackpot funds**
+```solidity
+function depositJackpotFunds(uint256 amount) external {
+    IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), amount);
+    emit JackpotFundDeposited(msg.sender, amount);
+}
+
+H. Consider gas-efficient random selection**
+* If `getEligibleAddresses()` returns thousands of addresses, fetch single user via index instead of loading full array
+* Use merkle tree or paginated selection if needed
+
+I. **improvements**
+* Make VRF params immutable
+* Add NatSpec comments
+* Optional: Migrate to Chainlink VRF v2/v2.
+
+
+##### 17. CheckInReward.sol
+| **Purpose**     | Daily login or activity-based MFH token reward                          
+| **Access**      | Public / onlyOwner for admin functions                                  
+| **Functions**   | `checkIn()`<br>`setToken()`<br>`setRewardAmount()`<br>`pause()` / `unpause()`<br>`emergencyWithdraw()`<br>`toggleRandomBonus()`<br>`currentDay()` 
+| **Events**      | `CheckedIn(address user, uint256 reward)`<br>`RewardAmountUpdated(uint256 newAmount)`<br>`TokenUpdated(address newToken)`<br>`RandomBonusToggled(bool enabled)` 
+| **Logic Rules** | • Restrict to once per calendar day (`block.timestamp / 1 days`) <br>• Optional random bonus <br>• Only when contract is not paused 
+| **Security**    | • Use `SafeERC20` for all token transfers <br>• Add `ReentrancyGuard` + `nonReentrant` <br>• Emergency withdraw <br>• Pause / unpause <br>• Use `Ownable2Step` 
+| **Integration** | Can be linked with Bubble.io or other frontends <br>• `currentDay()` view for frontend tracking 
+| **Testing**     | • Check-in restricted to once per calendar day <br>• Random bonus logic <br>• Reentrancy attempts <br>• Pausable contract <br>• Emergency withdraw works <br>• Token and reward updates e
+
+
+
+##### 18. Escrowmanager.sol
+Just apply these **6 final polish items to make it perfect and safe**.
+```text
+[ ] Upgrade to Ownable2Step (prevents accidental owner loss)
+[ ] Make nftContract immutable (never changes after deploy)
+[ ] Add isTrusted() view helper (frontend & off-chain monitoring)
+[ ] Restrict onERC721Received to only your NFT contract
+[ ] Add full NatSpec comments to every public/external function
+[ ] EmergencyWithdraw event includes depositor address for clarity
+```
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+
+contract EscrowManager is Ownable2Step, IERC721Receiver, ReentrancyGuard, Pausable {
+    IERC721 public immutable nftContract;   // ← immutable
+    address public multisig;
+    mapping(address => bool) public trustedModules;
+    mapping(uint256 => Escrow) public escrows;
+
+    struct Escrow {
+        address depositor;   // trusted module that initiated lock
+        uint256 tokenId;
+        bool locked;
+    }
+
+    // Events
+    event EscrowLocked(address indexed depositor, uint256 indexed tokenId);
+    event EscrowReleased(address indexed recipient, uint256 indexed tokenId);
+    event EscrowForfeited(address indexed to, uint256 indexed tokenId);
+    event TrustedModuleUpdated(address indexed module, bool trusted);
+    event MultisigUpdated(address indexed newMultisig);
+    event EmergencyWithdraw(address indexed to, uint256 indexed tokenId, address indexed depositor);
+
+    modifier onlyTrusted() {
+        require(trustedModules[msg.sender], "Not trusted");
+        _;
+    }
+    modifier onlyMultisig() {
+        require(msg.sender == multisig, "Only multisig");
+        _;
+    }
+
+    constructor(address _nft, address _multisig) {
+        require(_nft != address(0) && _multisig != address(0), "Zero address");
+        nftContract = IERC721(_nft);
+        multisig = _multisig;
+        emit MultisigUpdated(_multisig);
+    }
+
+    /// @notice Add or remove a trusted module
+    function setTrusted(address module, bool trusted) external onlyOwner {
+        trustedModules[module] = trusted;
+        emit TrustedModuleUpdated(module, trusted);
+    }
+
+    /// @notice Update multisig address
+    function setMultisig(address _multisig) external onlyOwner {
+        require(_multisig != address(0), "Zero address");
+        multisig = _multisig;
+        emit MultisigUpdated(_multisig);
+    }
+/
+    /// @notice Check if an address is a trusted module
+    function isTrusted(address module) external view returns (bool) {
+        return trustedModules[module];
+    }
+
+    /// @notice Lock an NFT that has already been transferred to this contract
+    /// @param tokenId The NFT tokenId to lock
+    function lockAsset(uint256 tokenId) external onlyTrusted whenNotPaused nonReentrant {
+        require(nftContract.ownerOf(tokenId) == address(this), "NFT not in escrow");
+        require(!escrows[tokenId].locked, "Already locked");
+
+        escrows[tokenId] = Escrow(msg.sender, tokenId, true);
+        emit EscrowLocked(msg.sender, tokenId);
+    }
+
+    /// @notice Release escrowed NFT back to user (only multisig)
+    function releaseAsset(uint256 tokenId, address recipient) external onlyMultisig whenNotPaused nonReentrant {
+        require(escrows[tokenId].locked, "Not locked");
+        require(recipient != address(0), "Zero recipient");
+
+        delete escrows[tokenId];
+        nftContract.safeTransferFrom(address(this), recipient, tokenId);
+        emit EscrowReleased(recipient, tokenId);
+    }
+
+    /// @notice Forfeit escrowed NFT to treasury/penalty address (only multisig)
+    function forfeitAsset(uint256 tokenId, address to) external onlyMultisig whenNotPaused nonReentrant {
+        require(escrows[tokenId].locked, "Not locked");
+        require(to != address(0), "Zero address");
+
+        delete escrows[tokenId];
+        nftContract.safeTransferFrom(address(this), to, tokenId);
+        emit EscrowForfeited(to, tokenId);
+    }
+
+    /// @notice Emergency recovery — only when contract is paused
+    /// @param tokenId NFT to recover
+    /// @param to Recipient (if zero, sends to original depositor)
+    function emergencyWithdraw(uint256 tokenId, address to) external onlyOwner whenPaused {
+        Escrow memory e = escrows[tokenId];
+        address recipient = to == address(0) ? e.depositor : to;
+        require(recipient != address(0), "No valid recipient");
+
+        delete escrows[tokenId];
+        nftContract.safeTransferFrom(address(this), recipient, tokenId);
+        emit EmergencyWithdraw(recipient, tokenId, e.depositor);
+    }
+
+    /// @notice View if token is currently escrowed
+    function isLocked(uint256 tokenId) external view returns (bool) {
+        return escrows[tokenId].locked;
+    }
+
+    /// @notice Get full escrow details
+    function getEscrow(uint256 tokenId) external view returns (address depositor, uint256 id, bool locked) {
+        Escrow memory e = escrows[tokenId];
+        return (e.depositor, e.tokenId, e.locked);
+    }
+
+    // === ERC721 Receiver ===
+    function onERC721Received(
+        address,
+        address,
+        uint256,
+        bytes calldata
+    ) external view override returns (bytes4) {
+        require(msg.sender == address(nftContract), "Only supported NFT");
+        return this.onERC721Received.selector;
+    }
+
+    // Pause helpers (OpenZeppelin already emits Paused/Unpaused)
+    function pause() external onlyOwner { _pause(); }
+    function unpause() external onlyOwner { _unpause(); }
+}        
+
+
+#####19. MultiSigAdmin.sol 
+[ ] Add public executeTx(uint256 txId) – manual trigger if auto-execute fails
+[ ] Add these view helpers:
+    → getSigners() → returns address[3]
+    → getTransaction(uint256 txId) → returns full Transaction struct
+    → getConfirmations(uint256 txId) → returns uint256
+    → isConfirmed(uint256 txId, address signer) → returns bool
+[ ] Add Received event on receive() / fallback
+[ ] Add full NatSpec comments to every public/external function
+[ ] Include bytes data in TxSubmitted event (already done in final code)
+[ ] Optimize isSigner() with || instead of loop – tiny gas save
+

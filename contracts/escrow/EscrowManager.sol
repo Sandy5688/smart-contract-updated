@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 
-contract EscrowManager is Ownable, IERC721Receiver, ReentrancyGuard, Pausable {
-    IERC721 public nftContract;
+contract EscrowManager is Ownable2Step, IERC721Receiver, ReentrancyGuard, Pausable {
+    IERC721 public immutable nftContract;
     mapping(address => bool) public trustedModules;
     address public multisig; // ONLY this can release/forfeit
 
@@ -25,7 +25,7 @@ contract EscrowManager is Ownable, IERC721Receiver, ReentrancyGuard, Pausable {
     event EscrowForfeited(address indexed to, uint256 indexed tokenId);
     event TrustedModuleUpdated(address indexed module, bool trusted);
     event MultisigUpdated(address indexed newMultisig);
-    event EmergencyWithdraw(address indexed to, uint256 indexed tokenId);
+    event EmergencyWithdraw(address indexed to, uint256 indexed tokenId, address indexed depositor);
 
     modifier onlyTrusted() {
         require(trustedModules[msg.sender], "Escrow: caller not trusted");
@@ -54,6 +54,11 @@ contract EscrowManager is Ownable, IERC721Receiver, ReentrancyGuard, Pausable {
         require(_multisig != address(0), "Invalid multisig");
         multisig = _multisig;
         emit MultisigUpdated(_multisig);
+    }
+
+    /// @notice Check if an address is a trusted module
+    function isTrusted(address module) external view returns (bool) {
+        return trustedModules[module];
     }
 
     function pause() external onlyOwner { _pause(); }
@@ -126,22 +131,24 @@ contract EscrowManager is Ownable, IERC721Receiver, ReentrancyGuard, Pausable {
      * @dev This is for exceptional recovery. NFT is returned to recorded depositor by default.
      */
     function emergencyWithdraw(uint256 tokenId, address to) external onlyOwner whenPaused {
-        address recipient = to == address(0) ? escrows[tokenId].depositor : to;
+        Escrow memory e = escrows[tokenId];
+        address recipient = to == address(0) ? e.depositor : to;
         require(recipient != address(0), "Escrow: bad emergency recipient");
         delete escrows[tokenId];
         nftContract.safeTransferFrom(address(this), recipient, tokenId);
-        emit EmergencyWithdraw(recipient, tokenId);
+        emit EmergencyWithdraw(recipient, tokenId, e.depositor);
     }
 
     /**
      * @notice ERC721 receiver handler so safeTransferFrom to this contract succeeds.
      */
     function onERC721Received(
-        address /*operator*/,
-        address /*from*/,
-        uint256 /*tokenId*/,
-        bytes calldata /*data*/
-    ) external pure override returns (bytes4) {
-        return IERC721Receiver.onERC721Received.selector;
+        address,
+        address,
+        uint256,
+        bytes calldata
+    ) external view override returns (bytes4) {
+        require(msg.sender == address(nftContract), "Escrow: only supported NFT");
+        return this.onERC721Received.selector;
     }
 }

@@ -18,6 +18,13 @@ contract MarketplaceCore is Ownable {
 
     uint256 public platformFeeBps = 500; // 5%
     uint256 public constant BPS_DENOMINATOR = 10000;
+    // Optional fee split (sum should equal platformFeeBps)
+    address public treasuryOps;
+    address public burnAddress;
+    address public rewardsTreasury;
+    uint256 public opsFeeBps = 300;
+    uint256 public burnFeeBps = 100;
+    uint256 public rewardsFeeBps = 100;
 
     struct Listing {
         address seller;
@@ -46,6 +53,23 @@ contract MarketplaceCore is Ownable {
         royaltyManager = IRoyaltyManager(_rm);
     }
 
+    function setFeeSplit(
+        address _ops,
+        address _burn,
+        address _rewards,
+        uint256 _opsBps,
+        uint256 _burnBps,
+        uint256 _rewardsBps
+    ) external onlyOwner {
+        require(_opsBps + _burnBps + _rewardsBps == platformFeeBps, "Split must equal platform fee");
+        treasuryOps = _ops;
+        burnAddress = _burn;
+        rewardsTreasury = _rewards;
+        opsFeeBps = _opsBps;
+        burnFeeBps = _burnBps;
+        rewardsFeeBps = _rewardsBps;
+    }
+
     function listNFT(uint256 tokenId, uint256 price) external {
         require(nft.ownerOf(tokenId) == msg.sender, "Not the owner");
         require(price > 0, "Invalid price");
@@ -72,7 +96,20 @@ contract MarketplaceCore is Ownable {
 
         // Transfer funds
         require(paymentToken.transferFrom(msg.sender, listing.seller, sellerAmount), "Payment failed");
-        require(paymentToken.transferFrom(msg.sender, treasury, feeAmount), "Fee transfer failed");
+        if (treasuryOps != address(0) || burnAddress != address(0) || rewardsTreasury != address(0)) {
+            // Split platform fee
+            if (opsFeeBps > 0 && treasuryOps != address(0)) {
+                require(paymentToken.transferFrom(msg.sender, treasuryOps, (listing.price * opsFeeBps) / BPS_DENOMINATOR), "Ops fee failed");
+            }
+            if (burnFeeBps > 0 && burnAddress != address(0)) {
+                require(paymentToken.transferFrom(msg.sender, burnAddress, (listing.price * burnFeeBps) / BPS_DENOMINATOR), "Burn fee failed");
+            }
+            if (rewardsFeeBps > 0 && rewardsTreasury != address(0)) {
+                require(paymentToken.transferFrom(msg.sender, rewardsTreasury, (listing.price * rewardsFeeBps) / BPS_DENOMINATOR), "Rewards fee failed");
+            }
+        } else {
+            require(paymentToken.transferFrom(msg.sender, treasury, feeAmount), "Fee transfer failed");
+        }
 
         // Transfer NFT to buyer
         nft.transferFrom(address(this), msg.sender, tokenId);

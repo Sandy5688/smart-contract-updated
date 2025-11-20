@@ -47,9 +47,9 @@ MFH-Dev-A-Smart-Con/
 ### **Token Module** (3 contracts)
 | Contract | Purpose | Key Features |
 |----------|---------|--------------|
-| `MFHToken.sol` | ERC20 utility token | 1B supply, pausable, mintable, burnable |
+| `MFHToken.sol` | ERC20 utility token | 1B fixed supply (non-mintable after deploy), pausable, holder burn |
 | `TreasuryVault.sol` | Platform revenue collector | Multisig withdrawals, token deposits |
-| `StakingRewards.sol` | Stake MFH for rewards | Time-based rewards, early withdrawal penalty |
+| `StakingRewards.sol` | Stake MFH for rewards | accRewardPerToken model, tokens/sec, optional early-unstake penalty |
 
 ### **NFT Module** (3 contracts)
 | Contract | Purpose | Key Features |
@@ -61,21 +61,21 @@ MFH-Dev-A-Smart-Con/
 ### **Marketplace Module** (4 contracts)
 | Contract | Purpose | Key Features |
 |----------|---------|--------------|
-| `MarketplaceCore.sol` | Buy/sell NFTs | Fixed price listings, 5% platform fee |
-| `BuyNowPayLater.sol` | Installment purchases | Escrow integration, payment plans |
-| `AuctionModule.sol` | Timed auctions | Minimum bid, highest bidder wins |
-| `BiddingSystem.sol` | Open bidding | Place/cancel bids, seller accepts |
+| `MarketplaceCore.sol` | Buy/sell NFTs | Fixed price listings, platform fee or configurable split |
+| `BuyNowPayLater.sol` | Installment purchases | Model A payouts (seller paid on completion; default pays paid-so-far), escrow, fees, guards |
+| `AuctionModule.sol` | Timed auctions | Minimum bid, platform fee to treasury, admin cancel, guards |
+| `BiddingSystem.sol` | Open bidding | Mapping-based bids, auto-refund, royalty + fee on accept, guards |
 
 ### **Rentals Module** (2 contracts)
 | Contract | Purpose | Key Features |
 |----------|---------|--------------|
-| `RentalEngine.sol` | NFT rental system | Direct rent(), return, default tracking |
-| `LeaseAgreement.sol` | Lease contracts | Start/end leases, duration control |
+| `RentalEngine.sol` | NFT rental escrow | True escrow via LeaseAgreement only, return/default flows, optional on-time reward |
+| `LeaseAgreement.sol` | Lease contracts | Start/end leases, upfront fee to lessor, nonReentrant, updateable engine |
 
 ### **Finance Module** (2 contracts)
 | Contract | Purpose | Key Features |
 |----------|---------|--------------|
-| `LoanModule.sol` | NFT-backed loans | Borrow MFH, installment repayment, liquidation |
+| `LoanModule.sol` | NFT-backed loans | Treasury-funded, interest BPS, installment repayment, liquidation to treasury, guards |
 | `InstallmentLogic.sol` | Payment library | Shared installment logic (library) |
 
 ### **Rewards Module** (3 contracts)
@@ -88,7 +88,7 @@ MFH-Dev-A-Smart-Con/
 ### **Escrow & Admin Module** (2 contracts)
 | Contract | Purpose | Key Features |
 |----------|---------|--------------|
-| `EscrowManager.sol` | Secure NFT custody | ReentrancyGuard, pausable, multisig release |
+| `EscrowManager.sol` | Secure NFT custody | Ownable2Step, immutable NFT, ReentrancyGuard, pausable, multisig release |
 | `MultiSigAdmin.sol` | 2-of-3 multisig wallet | Transaction proposals, confirmations, safe execution |
 
 **Total: 19 production-ready contracts** ✅

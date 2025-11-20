@@ -32,8 +32,7 @@ describe(" Token Module", function () {
     });
 
     it("should burn tokens correctly", async () => {
-      await token.connect(user1).approve(deployer.address, ethers.parseEther("100"));
-      await token.burn(user1.address, ethers.parseEther("100"));
+      await token.connect(user1).burn(ethers.parseEther("100"));
       const newBalance = await token.balanceOf(user1.address);
       expect(newBalance).to.equal(ethers.parseEther("900"));
     });

@@ -31,17 +31,12 @@ describe(" Token Module (Passing)", function () {
     expect(await token.paused()).to.equal(false);
   });
 
-  it("should emit Burn event when burned", async () => {
+  it("should emit Burn event when user burns", async () => {
     const burnAmount = ethers.parseEther("1000");
-
-    // Transfer some to user1 first (from deployer who owns full supply)
     await token.transfer(user1.address, burnAmount);
-
-    // Burn from user1's balance by owner
-    await expect(token.burn(user1.address, burnAmount))
+    await expect(token.connect(user1).burn(burnAmount))
       .to.emit(token, "Burn")
       .withArgs(user1.address, burnAmount);
-
     const userBalance = await token.balanceOf(user1.address);
     expect(userBalance).to.equal(0);
   });

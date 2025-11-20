@@ -48,12 +48,13 @@ describe(" NFT Module", function () {
     it("should mint NFT with valid metadata and payment", async () => {
       await token.connect(user1).approve(nftMinting.target, ethers.parseEther("10"));
       const metadataURI = "ipfs://test-metadata";
+      await nftMinting.approveMetadata(metadataURI);
       await expect(nftMinting.connect(user1).mintNFT(metadataURI))
         .to.emit(nftMinting, "NFTMinted")
         .withArgs(user1.address, 1);
       expect(await nftMinting.ownerOf(1)).to.equal(user1.address);
       expect(await nftMinting.tokenURI(1)).to.equal(metadataURI);
-      expect(await nftMinting.mintedBy(user1.address)).to.equal(1);
+      expect(await nftMinting.mintedByAddress(user1.address)).to.equal(1);
       expect(await token.balanceOf(nftMinting.target)).to.equal(ethers.parseEther("10"));
     });
 
@@ -66,6 +67,7 @@ describe(" NFT Module", function () {
     it("should reject minting beyond max per wallet", async () => {
       await token.connect(user1).approve(nftMinting.target, ethers.parseEther("50"));
       const metadataURI = "ipfs://test-metadata";
+      await nftMinting.approveMetadata(metadataURI);
       for (let i = 0; i < 5; i++) {
         await nftMinting.connect(user1).mintNFT(metadataURI);
       }
